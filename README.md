@@ -94,6 +94,9 @@ can only tell that an assistant message arrived, not that the route actually suc
 
 See [the integration contract](docs/INTEGRATIONS.md) for model, effort, OAuth, agent, MCP,
 and Jev boundaries.
+The optional [Jev Cordis route selector](Integrations/Jev/README.md) is source code for a
+user-configured DSH overlay. Its JavaScript file is also bundled under
+`DSH.app/Contents/Resources/Integrations/Jev/`; the app does not silently activate it.
 
 - A healthy `dsh` boot took 3–8 s in local checks. An intermittent DSH boot produced no URL
   until the watchdog restarted it (35.8 s in an eight-run sample). The app now restarts once

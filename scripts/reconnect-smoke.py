@@ -39,15 +39,22 @@ def wait_child(parent_pid: int, excluding: int | None = None, timeout: float = 4
     raise RuntimeError("app did not start or restart its DSH server")
 
 
-def wait_listening(pid: int, timeout: float = 90) -> None:
+def wait_ready(marker: Path, app: subprocess.Popen[bytes], timeout: float = 120) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        result = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-t"],
-                                capture_output=True, text=True, check=False)
-        if result.stdout.strip():
+        if marker.is_file() and marker.read_text() == "connected\n":
             return
+        if app.poll() is not None:
+            raise RuntimeError("app exited before its authenticated page was ready")
         time.sleep(0.5)
-    raise RuntimeError("DSH server did not start listening")
+    child = server_child(app.pid)
+    listening = False
+    if child:
+        probe = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(child), "-iTCP", "-sTCP:LISTEN", "-t"],
+                               capture_output=True, text=True, check=False)
+        listening = bool(probe.stdout.strip())
+    raise RuntimeError(f"authenticated DSH page did not become ready (child={child is not None}, "
+                       f"listening={listening}, navigation={marker.is_file()})")
 
 
 def still_running(pid: int) -> bool:
@@ -61,20 +68,29 @@ def main() -> None:
         raise SystemExit("bundle DSH first: scripts/bundle.sh")
     with tempfile.TemporaryDirectory(prefix="dsh-reconnect-") as profile:
         snapshot = Path(profile) / "recovered.png"
+        ready = Path(profile) / "ready.txt"
         env = os.environ.copy()
-        env.update(DSH_HOME=profile, HARNESS_SNAPSHOT=str(snapshot), HARNESS_SNAPSHOT_DELAY="12")
+        env.update(DSH_HOME=profile, HARNESS_SNAPSHOT=str(snapshot), HARNESS_SNAPSHOT_DELAY="12",
+                   HARNESS_READY_FILE=str(ready))
         app = subprocess.Popen([str(APP)], cwd=ROOT, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL)
         owned = []
         try:
-            first = wait_child(app.pid)
+            # Wait for the authenticated WebKit page, not merely an open TCP socket.
+            wait_ready(ready, app)
+            for _ in range(3):
+                first = wait_child(app.pid)
+                try:
+                    os.kill(first, signal.SIGTERM)
+                    break
+                except ProcessLookupError:
+                    # DSH can exit during its own cold boot; require a new connected page.
+                    ready.unlink(missing_ok=True)
+                    wait_ready(ready, app)
+            else:
+                raise RuntimeError("DSH exited repeatedly before it could be terminated")
             owned.append(first)
-            # Wait for its authenticated page to load so this exercises reconnection, not startup.
-            # A fresh profile installs its plugins first, which takes far longer than a warm boot.
-            wait_listening(first)
-            time.sleep(5)
-            os.kill(first, signal.SIGTERM)
-            second = wait_child(app.pid, excluding=first, timeout=30)
+            second = wait_child(app.pid, excluding=first, timeout=90)
             owned.append(second)
             output, _ = app.communicate(timeout=120)
             if app.returncode != 0 or not snapshot.is_file() or snapshot.stat().st_size < 1000:

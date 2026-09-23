@@ -12,7 +12,7 @@ struct IntegrationSettingsView: View {
     var body: some View {
         Form {
             Section("Jev · TypeSafe") {
-                Text("Optional semantic decisions. DSH requires a separately configured adapter or gateway to call Jev; this switch only authorizes your key for the DSH process.")
+                Text("Optional semantic decisions. A configured Jev adapter may send up to 2,048 characters of your task to TypeSafe to choose a route. This switch only forwards your key; configure the adapter separately.")
                     .font(.caption).foregroundStyle(.secondary)
                 integrationRow(.jev, enabled: $jevEnabled, hasKey: $jevHasKey, input: $jevInput)
             }

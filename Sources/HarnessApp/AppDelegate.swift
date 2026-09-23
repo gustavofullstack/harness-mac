@@ -247,12 +247,14 @@ struct Automation: Equatable {
     let snapshotPath: String
     let script: String?
     let delay: Double
+    let readyPath: String?
 
     static func fromEnvironment() -> Automation? {
         let env = ProcessInfo.processInfo.environment
         guard let path = env["HARNESS_SNAPSHOT"], !path.isEmpty else { return nil }
         return Automation(snapshotPath: path, script: env["HARNESS_SNAPSHOT_JS"],
-                          delay: Double(env["HARNESS_SNAPSHOT_DELAY"] ?? "") ?? 5)
+                          delay: Double(env["HARNESS_SNAPSHOT_DELAY"] ?? "") ?? 5,
+                          readyPath: env["HARNESS_READY_FILE"])
     }
 
     func fail(_ message: String) -> Never {

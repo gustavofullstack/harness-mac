@@ -28,8 +28,13 @@ environment before starting `dsh`. It only supplies `TYPESAFE_API_KEY` or
 credential, profile, endpoint, or default key. Removing a key turns its switch off.
 
 The switches authorize key forwarding; they do not install a Jev adapter or OmniRoute
-model provider. A Jev adapter must actually call TypeSafe and apply a typed decision at
-the correct gate. An OmniRoute route needs a DSH provider configuration that uses
+model provider. `Integrations/Jev/` provides an optional Cordis route selector and
+an isolated DSH loader smoke. A user must configure its overlay and allowed routes;
+the app does not load it just because the key switch is on. When configured, this
+plugin can send up to 2,048 characters of task text to TypeSafe and apply a typed
+route decision at `agent/request`. Its mock proves route/effort selection, but a full
+Web session and persisted `request/header` have not been verified. An OmniRoute
+route needs a DSH provider configuration that uses
 `apiKeyEnv: OMNI_ROUTER_API_KEY`. A saved key is not proof of a successful request.
 Restart Harness after changing either switch. Existing user-owned `$DSH_HOME` settings
 may still reference local gateways or credentials outside these two settings; the app
