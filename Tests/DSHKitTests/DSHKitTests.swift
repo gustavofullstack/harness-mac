@@ -183,6 +183,25 @@ private func json(_ s: String) throws -> JSONValue {
         #expect(started <= Date() && started > Date().addingTimeInterval(-3600))
         #expect(HarnessWebServer.startDate(of: 999_999) == nil)
     }
+
+    @Test func earlyExitDoesNotWaitForAPluginHoldingStdout() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dsh-early-exit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = dir.appendingPathComponent("fake-dsh")
+        try "#!/bin/sh\n/bin/sleep 6 &\nexit 1\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        let start = Date()
+        do {
+            _ = try await HarnessWebServer().start(executable: script,
+                environment: ["HOME": dir.path, "PATH": "/usr/bin:/bin"],
+                preferredPort: 0, stallTimeout: 2, timeout: 2)
+            Issue.record("an exited server cannot return a login URL")
+        } catch is HarnessError {
+            #expect(Date().timeIntervalSince(start) < 3)
+        }
+    }
 }
 @Suite struct WebServerAuthCookie {
     @Test func matchesDshsCookieName() {
