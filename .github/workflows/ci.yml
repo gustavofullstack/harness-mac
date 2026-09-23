@@ -1,0 +1,20 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Bundle
+        run: scripts/bundle.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Harness.app
+          path: dist/Harness.app

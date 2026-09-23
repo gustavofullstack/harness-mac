@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+dist/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store
+*.png
+!docs/*.png
+.env
+.env.*
