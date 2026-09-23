@@ -52,11 +52,25 @@ PLIST
 codesign --force --deep --sign - "$APP"
 
 if [ "${1:-}" = "--install" ]; then
-  # Earlier builds were named Harness.app; keep exactly one app installed.
-  for old in /Applications/Harness.app /Applications/DSH.app; do
-    [ -d "$old" ] && mv "$old" "$HOME/.Trash/$(basename "$old" .app)-$(date +%s).app"
-  done
-  ditto "$APP" /Applications/DSH.app
+  # Never replace the bundle under a running process. Stage and verify the new copy, then
+  # atomically swap it in; the previous version is restored if the swap fails.
+  if pgrep -f '/Applications/(DSH|Harness)\.app/Contents/MacOS/(DSH|Harness)' >/dev/null; then
+    echo "Close DSH.app before installing a new version" >&2
+    exit 1
+  fi
+  STAGE="$(mktemp -d /Applications/.dsh-install.XXXXXX)"
+  trap 'if [ ! -d /Applications/DSH.app ]; then
+    [ ! -d "$STAGE/previous-DSH.app" ] || mv "$STAGE/previous-DSH.app" /Applications/DSH.app
+    [ ! -d "$STAGE/previous-Harness.app" ] || mv "$STAGE/previous-Harness.app" /Applications/Harness.app
+  fi
+  rm -rf "$STAGE"' EXIT
+  ditto "$APP" "$STAGE/DSH.app"
+  codesign --verify --deep --strict "$STAGE/DSH.app"
+  [ ! -d /Applications/DSH.app ] || mv /Applications/DSH.app "$STAGE/previous-DSH.app"
+  [ ! -d /Applications/Harness.app ] || mv /Applications/Harness.app "$STAGE/previous-Harness.app"
+  mv "$STAGE/DSH.app" /Applications/DSH.app
+  rm -rf "$STAGE"
+  trap - EXIT
   rm -rf "$APP"
   echo /Applications/DSH.app
 else

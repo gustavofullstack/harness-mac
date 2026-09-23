@@ -16,21 +16,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.run()
     }
 
-    private let server = HarnessWebServer(pidFile: {
+    private let automation = Automation.fromEnvironment()
+    /// Headless runs get a free port and no pidfile unless HARNESS_PORT is set, so they never touch
+    /// the user's server. A normal launch starts a fresh server and receives its login token.
+    private lazy var port = Int(ProcessInfo.processInfo.environment["HARNESS_PORT"] ?? "") ?? (automation == nil ? 3179 : 0)
+    private lazy var server = HarnessWebServer(pidFile: port == 0 ? nil : {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Harness", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("dsh-web.pid")
+        return dir.appendingPathComponent(port == 3179 ? "dsh-web.pid" : "dsh-web-\(port).pid")
     }())
-    private let automation = Automation.fromEnvironment()
+    private var recentExits: [Date] = []
+    private var authFailures = 0
     private var window: NSWindow!
     private var web: WebController!
-    /// dsh runs agents that keep working while the window is hidden; App Nap would throttle them.
-    private let noNap = ProcessInfo.processInfo.beginActivity(
-        options: .userInitiatedAllowingIdleSystemSleep, reason: "DeepSeek Harness server is running")
+    private var wakeActivity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One window per install: a second launch brings the running one forward.
+        if automation == nil, let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? "").first(where: {
+                $0 != .current && $0.bundleURL == Bundle.main.bundleURL && $0.activationPolicy == .regular }) {
+            running.activate()
+            exit(0)
+        }
         NSApp.mainMenu = MainMenu.build()
+        setKeepAwake(UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true)
+        server.onUnexpectedExit = { [weak self] in Task { @MainActor in self?.serverExited() } }
         web = WebController(automation: automation)
         window = makeWindow()
         if automation == nil {
@@ -56,6 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         w.contentViewController = web
         w.isReleasedWhenClosed = false
         if automation == nil {
+            // Blend the native titlebar into the DSH canvas while preserving familiar macOS
+            // window controls. The web view remains the unmodified upstream interface.
+            w.titleVisibility = .hidden
+            w.titlebarAppearsTransparent = true
+            w.titlebarSeparatorStyle = .none
+            w.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 1)
             w.center()
             w.setFrameAutosaveName("HarnessMainWindow")
             w.tabbingMode = .disallowed
@@ -77,7 +95,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             booting = false
             if restartPending { restartPending = false; Task { await boot() } }
         }
-        web.showLoading("Starting DeepSeek Harness…\nWith many MCP servers configured this can take up to a minute.")
+        let loading = Task { [web] in
+            try await Task.sleep(for: .milliseconds(400))
+            web?.showLoading("Starting DeepSeek Harness…")
+        }
+        defer { loading.cancel() }
         let env = await Task.detached { HarnessEnvironment.loginShell() }.value
         let override = UserDefaults.standard.string(forKey: "dshPath") ?? ""
         let dsh = FileManager.default.isExecutableFile(atPath: override)
@@ -89,7 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            let url = try await server.start(executable: dsh, environment: env)
+            let url = try await server.start(executable: dsh, environment: env, preferredPort: port)
+            loading.cancel()
             await web.load(url)
         } catch {
             web.showError(error.localizedDescription, retry: { [weak self] in Task { await self?.boot() } })
@@ -99,7 +122,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    func applicationWillTerminate(_ notification: Notification) { server.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        server.stop()
+        setKeepAwake(false)
+    }
+
+    private func setKeepAwake(_ enabled: Bool) {
+        if let wakeActivity {
+            ProcessInfo.processInfo.endActivity(wakeActivity)
+            self.wakeActivity = nil
+        }
+        if enabled && automation == nil {
+            wakeActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "DeepSeek Harness is running")
+        }
+    }
+
+    @objc func toggleKeepAwake(_ sender: NSMenuItem) {
+        let enabled = sender.state != .on
+        UserDefaults.standard.set(enabled, forKey: "keepAwake")
+        setKeepAwake(enabled)
+        sender.state = enabled ? .on : .off
+    }
+
+    /// The server died under the page (crash, killed from a terminal): boot it again with a new
+    /// login token and load the new URL.
+    private func serverExited() {
+        recentExits = recentExits.filter { $0.timeIntervalSinceNow > -60 } + [Date()]
+        guard recentExits.count <= 3 else {
+            web.showError("The harness server stopped \(recentExits.count) times in a minute.",
+                          retry: { [weak self] in self?.recentExits = []; Task { await self?.boot() } })
+            return
+        }
+        Task { await boot() }
+    }
+
+    /// An unexpected 401 on the fresh login URL is retried once, then surfaced rather than looping.
+    func serverRejectedSession() {
+        authFailures += 1
+        server.stop()
+        guard authFailures <= 1 else {
+            web.showError("The harness rejected its login session.", retry: { [weak self] in
+                self?.authFailures = 0
+                Task { await self?.boot() }
+            })
+            return
+        }
+        Task { await boot() }
+    }
+
+    func serverAuthenticated() { authFailures = 0 }
 
     // MARK: - Menu actions
 
