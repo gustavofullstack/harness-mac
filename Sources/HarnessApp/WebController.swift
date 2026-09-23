@@ -61,8 +61,8 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
         ])
         view = root
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] web, _ in
-            MainActor.assumeIsolated {
-                self?.view.window?.title = (web.title?.isEmpty == false ? web.title : nil) ?? "Harness"
+            Task { @MainActor in
+                self?.view.window?.title = (web.title?.isEmpty == false ? web.title : nil) ?? "DSH"
             }
         }
     }
@@ -140,7 +140,9 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = action.request.url { NSWorkspace.shared.open(url) }
+        if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme ?? "") {
+            NSWorkspace.shared.open(url)
+        }
         return nil
     }
 

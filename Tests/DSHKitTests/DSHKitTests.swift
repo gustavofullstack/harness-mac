@@ -152,9 +152,15 @@ private func json(_ s: String) throws -> JSONValue {
 @Suite struct WebServerURL {
     @Test func acceptsOnlyLoopbackHTTP() {
         #expect(HarnessWebServer.parseURL(line: "dsh web: http://127.0.0.1:3179/?token=abc")?.port == 3179)
-        #expect(HarnessWebServer.parseURL(line: "dsh web: http://localhost:8080/") != nil)
+        #expect(HarnessWebServer.parseURL(line: "dsh web: http://localhost:8080/") == nil)
         #expect(HarnessWebServer.parseURL(line: "dsh web: http://0.0.0.0:3179/") == nil)
         #expect(HarnessWebServer.parseURL(line: "dsh web: https://example.com/") == nil)
         #expect(HarnessWebServer.parseURL(line: "listening on 3179") == nil)
+    }
+
+    @Test func startDateOfSelfIsInThePast() throws {
+        let started = try #require(HarnessWebServer.startDate(of: getpid()))
+        #expect(started <= Date() && started > Date().addingTimeInterval(-3600))
+        #expect(HarnessWebServer.startDate(of: 999_999) == nil)
     }
 }

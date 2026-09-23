@@ -26,12 +26,23 @@ public final class HarnessWebServer: @unchecked Sendable {
     private func reapLeftover() {
         guard let pidFile, let text = try? String(contentsOf: pidFile, encoding: .utf8),
               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 else { return }
+        let written = (try? FileManager.default.attributesOfItem(atPath: pidFile.path)[.modificationDate]) as? Date
         try? FileManager.default.removeItem(at: pidFile)
-        guard Self.commandLine(of: pid).contains("--profile web --no-open --host 127.0.0.1") else { return }
+        // The pid is written right after launch; a process started later reuses the pid and is not ours.
+        guard let written, let started = Self.startDate(of: pid), started <= written.addingTimeInterval(1),
+              Self.commandLine(of: pid).contains("--profile web --no-open --host 127.0.0.1") else { return }
         kill(pid, SIGTERM)
         let deadline = Date().addingTimeInterval(6)
         while kill(pid, 0) == 0, Date() < deadline { usleep(50_000) }
         if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
+    static func startDate(of pid: pid_t) -> Date? {
+        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let t = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(t.tv_sec) + TimeInterval(t.tv_usec) / 1e6)
     }
 
     static func commandLine(of pid: pid_t) -> String {
@@ -46,12 +57,12 @@ public final class HarnessWebServer: @unchecked Sendable {
         return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     }
 
-    /// Parses `dsh web: http://127.0.0.1:PORT/?token=…`. Only loopback http URLs are accepted.
+    /// Parses `dsh web: http://127.0.0.1:PORT/?token=…`. Only http on 127.0.0.1, where dsh is bound, is accepted.
     public static func parseURL(line: String) -> URL? {
         guard let marker = line.range(of: "dsh web: ") else { return nil }
         let text = line[marker.upperBound...].trimmingCharacters(in: .whitespaces)
         guard let url = URL(string: text), url.scheme == "http",
-              let host = url.host, ["127.0.0.1", "localhost", "::1"].contains(host) else { return nil }
+              url.host == "127.0.0.1" else { return nil }
         return url
     }
 
@@ -119,6 +130,11 @@ public final class HarnessWebServer: @unchecked Sendable {
                 self?.lock.withLock { self?.timedOut = true }
                 self?.noteStderr("dsh did not print its URL within \(Int(timeout)) s")
                 proc.terminate()
+                // MCP servers spawned by dsh can hold stdout open after it exits, so the reader may
+                // never see EOF; end the wait here instead.
+                try await Task.sleep(for: .seconds(6))
+                if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+                found.yield(nil)
             }
         }
         defer { watchdog.cancel() }

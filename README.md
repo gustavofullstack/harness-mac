@@ -1,4 +1,4 @@
-# Harness for Mac
+# DSH for Mac
 
 An **unofficial** native macOS app for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
 
@@ -39,11 +39,14 @@ server whose whole lifecycle is owned by the app.
 
 ```sh
 swift test                 # unit tests
-scripts/bundle.sh          # universal, ad-hoc signed dist/Harness.app
-open dist/Harness.app
+scripts/bundle.sh            # universal, ad-hoc signed dist/DSH.app
+scripts/bundle.sh --install  # same, replacing /Applications/DSH.app (one copy only)
 ```
 
 The first launch of an ad-hoc signed app needs right-click → Open.
+
+The app icon is the harness's own logo, read at build time from your local `dsh` installation
+(it is not part of this repository). Without `dsh` installed, a neutral icon is used.
 
 ## Headless check
 
@@ -51,7 +54,7 @@ The app can render off-screen, save a PNG and exit — handy for CI and for veri
 without taking over your screen:
 
 ```sh
-HARNESS_SNAPSHOT=/tmp/harness.png dist/Harness.app/Contents/MacOS/Harness
+HARNESS_SNAPSHOT=/tmp/harness.png /Applications/DSH.app/Contents/MacOS/DSH
 ```
 
 `HARNESS_SNAPSHOT_JS` is evaluated in the page after it loads, and `HARNESS_SNAPSHOT_DELAY`

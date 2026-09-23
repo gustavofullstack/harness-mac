@@ -16,5 +16,5 @@ jobs:
         run: scripts/bundle.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: Harness.app
-          path: dist/Harness.app
+          name: DSH.app
+          path: dist/DSH.app

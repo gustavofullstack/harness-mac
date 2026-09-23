@@ -1,30 +1,43 @@
 #!/usr/bin/env bash
-# Builds Harness.app from the Swift package (release, arm64 + x86_64 when available).
-# Usage: scripts/bundle.sh [output-dir]   (default: ./dist)
+# Builds DSH.app from the Swift package (release, arm64 + x86_64 when available).
+# Usage: scripts/bundle.sh [--install]
+#   --install  replaces /Applications/DSH.app with the new build (never leaves two copies)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT="${1:-dist}"
+OUT=dist
 VERSION="$(cat VERSION 2>/dev/null || echo 0.1.0)"
-APP="$OUT/Harness.app"
+APP="$OUT/DSH.app"
 
-swift build -c release --product Harness --arch arm64 --arch x86_64 2>/dev/null \
-  || swift build -c release --product Harness
-BIN="$(swift build -c release --product Harness --show-bin-path)/Harness"
-[ -x "$BIN" ] || BIN="$(ls -d .build/apple/Products/Release/Harness 2>/dev/null)"
+swift build -c release --product DSH --arch arm64 --arch x86_64 2>/dev/null \
+  || swift build -c release --product DSH
+BIN="$(swift build -c release --product DSH --arch arm64 --arch x86_64 --show-bin-path 2>/dev/null || swift build -c release --product DSH --show-bin-path)/DSH"
 
-rm -rf "$APP"
+rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Harness"
-[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+touch "$OUT/.metadata_never_index"   # keep build copies out of Spotlight/Launchpad
+cp "$BIN" "$APP/Contents/MacOS/DSH"
+
+# Icon: the harness's own logo, read from the local dsh install at build time (never committed);
+# without dsh installed, the neutral icon in Resources/ is used.
+LOGO=""
+if DSH_BIN="$(command -v dsh 2>/dev/null)"; then
+  ROOT="$(cd "$(dirname "$(realpath "$DSH_BIN")")/../../.." && pwd)"
+  LOGO="$(find "$ROOT" -maxdepth 4 -path '*dsh-web-frontend/dist/favicon.svg' 2>/dev/null | head -1)"
+fi
+if [ -n "$LOGO" ]; then
+  swift scripts/make-icon.swift "$APP/Contents/Resources/AppIcon.icns" "$LOGO" >/dev/null
+elif [ -f Resources/AppIcon.icns ]; then
+  cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Harness</string>
-  <key>CFBundleDisplayName</key><string>Harness</string>
+  <key>CFBundleName</key><string>DSH</string>
+  <key>CFBundleDisplayName</key><string>DSH</string>
   <key>CFBundleIdentifier</key><string>io.github.harness-mac</string>
-  <key>CFBundleExecutable</key><string>Harness</string>
+  <key>CFBundleExecutable</key><string>DSH</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
@@ -37,4 +50,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 codesign --force --deep --sign - "$APP"
-echo "$APP"
+
+if [ "${1:-}" = "--install" ]; then
+  # Earlier builds were named Harness.app; keep exactly one app installed.
+  for old in /Applications/Harness.app /Applications/DSH.app; do
+    [ -d "$old" ] && mv "$old" "$HOME/.Trash/$(basename "$old" .app)-$(date +%s).app"
+  done
+  ditto "$APP" /Applications/DSH.app
+  rm -rf "$APP"
+  echo /Applications/DSH.app
+else
+  echo "$APP"
+fi

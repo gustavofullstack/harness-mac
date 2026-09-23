@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "DSHKit", targets: ["DSHKit"]),
-        .executable(name: "Harness", targets: ["HarnessApp"]),
+        .executable(name: "DSH", targets: ["HarnessApp"]),
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),

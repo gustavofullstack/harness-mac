@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ? [.titled, .closable, .miniaturizable, .resizable]
             : [.borderless]
         let w = NSWindow(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
-        w.title = "Harness"
+        w.title = "DSH"
         w.minSize = NSSize(width: 720, height: 480)
         w.contentViewController = web
         w.isReleasedWhenClosed = false
@@ -65,7 +65,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return w
     }
 
+    private var booting = false
+    private var restartPending = false
+
     private func boot() async {
+        // Retry and Restart can fire while a boot is still waiting on dsh; two boots would stop each
+        // other's server, so a Restart during a boot runs once that boot has ended.
+        guard !booting else { return }
+        booting = true
+        defer {
+            booting = false
+            if restartPending { restartPending = false; Task { await boot() } }
+        }
         web.showLoading("Starting DeepSeek Harness…\nWith many MCP servers configured this can take up to a minute.")
         let env = await Task.detached { HarnessEnvironment.loginShell() }.value
         let override = UserDefaults.standard.string(forKey: "dshPath") ?? ""
@@ -95,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func reloadHarness(_ sender: Any?) { web.webView.reload() }
 
     @objc func restartHarness(_ sender: Any?) {
+        if booting { restartPending = true }
         server.stop()
         Task { await boot() }
     }
