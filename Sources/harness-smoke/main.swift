@@ -12,12 +12,15 @@ guard args.count >= 4 else {
 let env = HarnessEnvironment.loginShell()
 guard let dsh = HarnessEnvironment.locateDSH(in: env) else { print("dsh not found on PATH"); exit(1) }
 let workspace = args.count > 4 ? args[4] : FileManager.default.currentDirectoryPath
+let effort = env["HARNESS_SMOKE_EFFORT"]
+let expected = env["HARNESS_SMOKE_EXPECT"]
 
 let runtime = HarnessRuntime()
 let started = Date()
 do {
     let info = try await runtime.start(executable: dsh, environment: env,
-                                       params: InitializeParams(cwd: workspace, provider: args[1], model: args[2]))
+                                       params: InitializeParams(cwd: workspace, provider: args[1],
+                                                                model: args[2], reasoningEffort: effort))
     print("server:", info.serverInfo.name, info.serverInfo.version)
     var session = ChatSession(provider: args[1], model: args[2], workspace: workspace, generation: 1)
     let receipt = try await runtime.prompt(sessionId: session.id, blocks: [.text(args[3])])
@@ -38,7 +41,14 @@ do {
             }
             print(String(format: "elapsed: %.1fs", Date().timeIntervalSince(started)))
             await runtime.shutdown()
-            exit(session.items.contains { if case .assistant = $0.kind { true } else { false } } ? 0 : 1)
+            let answer = session.items.compactMap { item -> String? in
+                if case .assistant(let text) = item.kind { return text }
+                return nil
+            }.last?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let passed = answer.map {
+                !$0.isEmpty && !$0.contains("[Erro JCR:") && (expected == nil || $0 == expected)
+            } ?? false
+            exit(passed ? 0 : 1)
         default: break
         }
     }

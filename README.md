@@ -16,13 +16,16 @@ server whose whole lifecycle is owned by the app.
 - Stops it on quit (SIGTERM, then SIGKILL after 6 s so MCP servers are shut down cleanly).
   `dsh --profile web` does not exit when its parent dies, so the app records the server's pid and
   stops a leftover server on the next launch (after a crash or force quit).
-- Opts out of App Nap and starts `dsh` at user-initiated QoS, so agents keep full speed while
-  the window is hidden.
+- Starts a fresh server on each launch and loads the login URL it emits. A response from `/`
+  without that login token does not establish an authenticated session.
+- Starts `dsh` at user-initiated QoS. **View → Keep Mac Awake While DSH Runs** is on by
+  default to prevent idle sleep during a task and can be turned off.
 - Keeps the server on loopback: any other link opens in your default browser.
 - Uses a stable local port (3179, falling back to a free one) so the UI's local storage —
   current session, drafts — survives relaunches.
 - Native menus: ⌘R reload, ⇧⌘R restart the harness, ⇧⌘O open in browser, ⌘0/⌘=/⌘- zoom,
   full screen, standard Edit shortcuts.
+- Blends the native titlebar into the harness canvas while keeping macOS window controls.
 - Nothing leaves your Mac: the app reads no credentials and sends no telemetry. Your harness
   settings, keys and sessions stay where `dsh` keeps them (`~/.dsh`).
 
@@ -70,11 +73,31 @@ HARNESS_SNAPSHOT=/tmp/harness.png /Applications/DSH.app/Contents/MacOS/DSH
 | `Sources/webserver-smoke` | CLI that starts and stops `dsh --profile web` N times and prints boot times (`webserver-smoke 6`) |
 | `Tests/DSHKitTests` | Framing, protocol decoding, settings, transcript reducer, URL parsing |
 
+`webserver-smoke` uses an OS-assigned port, checks that the emitted login URL authenticates,
+and checks that the server stops accepting connections after `stop()`.
+
+`python3 scripts/reconnect-smoke.py` runs the app off-screen with a temporary DSH profile,
+terminates only its own server child, checks that the page reconnects, and verifies the
+replacement server exits with the app.
+
+For a minimal SDK request with a selected effort, set `HARNESS_SMOKE_EFFORT` before running
+`harness-smoke`. The effort must be declared for that model by the installed DSH configuration.
+Set `HARNESS_SMOKE_EXPECT` to require an exact synthetic answer; without it, the smoke check
+can only tell that an assistant message arrived, not that the route actually succeeded.
+
 ## Notes
 
-- A healthy `dsh` boot takes 5–8 s. Now and then a boot started from the app stalls before
-  printing its URL; the app restarts it once after 30 s of silence (then waits up to 180 s), so
-  the worst case seen in testing is about 40 s.
+See [the integration contract](docs/INTEGRATIONS.md) for model, effort, OAuth, agent, MCP,
+and Jev boundaries.
+
+- A healthy `dsh` boot took 3–8 s in local checks. An intermittent DSH boot produced no URL
+  until the watchdog restarted it (35.8 s in an eight-run sample). The app now restarts once
+  after 15 s without a URL and then waits up to 180 s for the retry. The underlying DSH stall
+  remains under investigation.
+- The model and effort menus are supplied by the installed DSH Web UI. Custom models show an
+  Effort menu only when they declare `reasoningEfforts` in `$DSH_HOME/settings.yaml`. Leaving
+  effort unselected lets the configured route choose automatically. The app does not create a
+  separate model entry for each effort.
 - SDK sessions (`DSHKit`) cannot be resumed across runtime processes; that limit comes from `dsh`.
 
 ## License

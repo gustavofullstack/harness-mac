@@ -9,6 +9,7 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
     private let automation: Automation?
     private var origin: URL?
     private var connectAttempts = 0
+    private var staleDataCleanup: Task<Void, Never>?
     private var titleObservation: NSKeyValueObservation?
     private let overlay = NSStackView()
 
@@ -37,6 +38,12 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
         super.init(nibName: nil, bundle: nil)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        // Run the one-time service worker cleanup while dsh starts. Clearing every cache on every
+        // navigation made the UI slower and could interrupt a page that was already connected.
+        staleDataCleanup = Task {
+            await webView.configuration.websiteDataStore.removeData(
+                ofTypes: [WKWebsiteDataTypeServiceWorkerRegistrations], modifiedSince: .distantPast)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -90,19 +97,13 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
         setOverlay([icon, label("DeepSeek Harness could not start", secondary: false), label(text, secondary: true), buttons])
     }
 
-    /// Every launch serves a fresh dsh (new token, maybe a new build), so workers and caches from
-    /// the previous one are dropped before loading. Local storage (current session, drafts) is kept.
+    /// A fresh dsh supplies a new login token. Local storage and regular caches survive relaunches.
     func load(_ url: URL) async {
         origin = url
         connectAttempts = 0
-        await dropStaleData()
-        webView.load(URLRequest(url: url))
-    }
-
-    private func dropStaleData() async {
-        let stale: Set<String> = [WKWebsiteDataTypeServiceWorkerRegistrations, WKWebsiteDataTypeFetchCache,
-                                  WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
-        await webView.configuration.websiteDataStore.removeData(ofTypes: stale, modifiedSince: .distantPast)
+        await staleDataCleanup?.value
+        staleDataCleanup = nil
+        webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 
     private func setOverlay(_ views: [NSView]) {
@@ -138,6 +139,14 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
         return .cancel
     }
 
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if response.isForMainFrame, (response.response as? HTTPURLResponse)?.statusCode == 401 {
+            (NSApp.delegate as? AppDelegate)?.serverRejectedSession()
+            return .cancel
+        }
+        return .allow
+    }
+
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme ?? "") {
@@ -148,17 +157,20 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         setOverlay([])
+        (NSApp.delegate as? AppDelegate)?.serverAuthenticated()
         if let automation { Task { await runAutomation(automation) } }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        // Cancelled by the policy above (401 → new session) or by a newer load: not a failure.
+        if nsError.code == NSURLErrorCancelled || (nsError.domain == "WebKitErrorDomain" && nsError.code == 102) { return }
         // Retry briefly: the socket may still be coming up, or a stale worker is being dropped.
-        if (error as NSError).code == NSURLErrorCannotConnectToHost, connectAttempts < 10, let origin {
+        if nsError.code == NSURLErrorCannotConnectToHost, connectAttempts < 10, let origin {
             connectAttempts += 1
             Task {
-                await dropStaleData()
                 try? await Task.sleep(for: .milliseconds(300 * connectAttempts))
-                webView.load(URLRequest(url: origin))
+                webView.load(URLRequest(url: origin, cachePolicy: .reloadIgnoringLocalCacheData))
             }
             return
         }
@@ -211,19 +223,21 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate 
         try? await Task.sleep(for: .seconds(job.delay))
         if let script = job.script, !script.isEmpty {
             do { _ = try await webView.evaluateJavaScript(script + "\n;0") }
-            catch { print("script error: \(error.localizedDescription)") }
+            catch { job.fail("automation script failed") }
             try? await Task.sleep(for: .seconds(job.delay))
         }
         let text = (try? await webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
-        print("title: \(webView.title ?? "")")
-        print("text: \(text.prefix(1500))")
+        let connectedUI = text.contains("New Session") &&
+            !text.localizedCaseInsensitiveContains("Reconnect now") &&
+            !text.localizedCaseInsensitiveContains("Could not connect")
+        print("ui: \(connectedUI ? "connected" : "unverified")")
         guard let image = try? await webView.takeSnapshot(configuration: nil),
               let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
             job.fail("snapshot failed")
         }
         do { try png.write(to: URL(fileURLWithPath: job.snapshotPath)) } catch { job.fail(error.localizedDescription) }
-        print("snapshot: \(job.snapshotPath)")
+        print("snapshot: saved")
         NSApp.terminate(nil)
     }
 }

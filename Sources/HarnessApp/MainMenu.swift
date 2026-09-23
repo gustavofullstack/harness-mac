@@ -29,6 +29,7 @@ enum MainMenu {
             item("Reload", #selector(AppDelegate.reloadHarness(_:)), "r"),
             item("Restart Harness", #selector(AppDelegate.restartHarness(_:)), "r", [.command, .shift]),
             item("Open in Browser", #selector(AppDelegate.openInBrowser(_:)), "o", [.command, .shift]),
+            keepAwakeItem(),
             .separator(),
             item("Actual Size", #selector(AppDelegate.actualSize(_:)), "0"),
             item("Zoom In", #selector(AppDelegate.zoomIn(_:)), "="),
@@ -50,6 +51,14 @@ enum MainMenu {
                              _ modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.keyEquivalentModifierMask = modifiers
+        return item
+    }
+
+    private static func keepAwakeItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Keep Mac Awake While DSH Runs",
+                              action: #selector(AppDelegate.toggleKeepAwake(_:)), keyEquivalent: "")
+        item.target = NSApp.delegate
+        item.state = (UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true) ? .on : .off
         return item
     }
 }

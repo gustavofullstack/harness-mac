@@ -12,8 +12,8 @@ public enum HarnessError: Error, LocalizedError, Sendable, Equatable {
         case .notRunning: return "The dsh runtime is not running."
         case .launchFailed(let why): return "Could not start dsh: \(why)"
         case .rpc(let code, let message): return "dsh error \(code): \(message)"
-        case .processExited(let status, let tail):
-            return "dsh exited with status \(status)." + (tail.isEmpty ? "" : "\n\(tail)")
+        case .processExited(let status, _):
+            return "dsh exited with status \(status)."
         case .malformedResponse: return "dsh sent a response the client could not read."
         }
     }
