@@ -14,6 +14,7 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate,
     private var origin: URL?
     private var connectAttempts = 0
     private var staleDataCleanup: Task<Void, Never>?
+    private var automationTask: Task<Void, Never>?
     private var titleObservation: NSKeyValueObservation?
     private let overlay = NSStackView()
 
@@ -240,7 +241,10 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate,
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         setOverlay([])
         (NSApp.delegate as? AppDelegate)?.serverAuthenticated()
-        if let automation { Task { await runAutomation(automation) } }
+        if let automation {
+            automationTask?.cancel()
+            automationTask = Task { await runAutomation(automation) }
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -320,16 +324,29 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate,
     }
 
     private func runAutomation(_ job: Automation) async {
-        try? await Task.sleep(for: .seconds(job.delay))
+        if let readyPath = job.readyPath, !readyPath.isEmpty {
+            let marker = URL(fileURLWithPath: readyPath)
+            try? Data("navigated\n".utf8).write(to: marker, options: .atomic)
+            var connected = false
+            for _ in 0..<180 {
+                if Task.isCancelled { return }
+                let pageText = (try? await webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
+                if isConnected(pageText) { connected = true; break }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard connected else { job.fail("connected page did not become ready") }
+            do { try Data("connected\n".utf8).write(to: marker, options: .atomic) }
+            catch { job.fail("could not write ready marker") }
+        }
+        do { try await Task.sleep(for: .seconds(job.delay)) } catch { return }
         if let script = job.script, !script.isEmpty {
             do { _ = try await webView.evaluateJavaScript(script + "\n;0") }
             catch { job.fail("automation script failed") }
-            try? await Task.sleep(for: .seconds(job.delay))
+            do { try await Task.sleep(for: .seconds(job.delay)) } catch { return }
         }
+        if Task.isCancelled { return }
         let text = (try? await webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
-        let connectedUI = text.contains("New Session") &&
-            !text.localizedCaseInsensitiveContains("Reconnect now") &&
-            !text.localizedCaseInsensitiveContains("Could not connect")
+        let connectedUI = isConnected(text)
         print("ui: \(connectedUI ? "connected" : "unverified")")
         print("title: \(webView.title ?? "")")
         print("window: \(view.window.map { NSStringFromRect($0.frame) } ?? "none")")
@@ -341,6 +358,12 @@ final class WebController: NSViewController, WKNavigationDelegate, WKUIDelegate,
         do { try png.write(to: URL(fileURLWithPath: job.snapshotPath)) } catch { job.fail(error.localizedDescription) }
         print("snapshot: saved")
         NSApp.terminate(nil)
+    }
+
+    private func isConnected(_ text: String) -> Bool {
+        text.contains("New Session") &&
+            !text.localizedCaseInsensitiveContains("Reconnect now") &&
+            !text.localizedCaseInsensitiveContains("Could not connect")
     }
 }
 

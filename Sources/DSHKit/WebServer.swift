@@ -173,13 +173,21 @@ public final class HarnessWebServer: @unchecked Sendable {
         proc.standardError = err
         let stdin = Pipe()
         proc.standardInput = stdin
+        // A plugin child can inherit stdout after dsh exits. EOF then never arrives, so the
+        // URL reader alone cannot detect an early crash. The process exit must end the wait.
+        let (urls, found) = AsyncStream<URL?>.makeStream()
         do { try proc.run() } catch { throw HarnessError.launchFailed(error.localizedDescription) }
+        let earlyExit = DispatchSource.makeProcessSource(identifier: proc.processIdentifier,
+                                                          eventMask: .exit, queue: .global())
+        earlyExit.setEventHandler { found.yield(nil) }
+        earlyExit.resume()
+        defer { earlyExit.cancel() }
+        if !proc.isRunning { found.yield(nil) }
         lock.withLock { process = proc; pid = proc.processIdentifier; self.stdin = stdin
                         stderrTail = []; timedOut = false; portInUse = false }
         record(pid: proc.processIdentifier)
 
         // Both pipes are drained for the life of the process, otherwise a full pipe blocks dsh.
-        let (urls, found) = AsyncStream<URL?>.makeStream()
         Task.detached {
             do { for try await line in out.fileHandleForReading.bytes.lines {
                 if let url = Self.parseURL(line: line) { found.yield(url) }
@@ -187,7 +195,7 @@ public final class HarnessWebServer: @unchecked Sendable {
             found.yield(nil)
             found.finish()
         }
-        let stderrDrained = Task.detached { [weak self] in
+        _ = Task.detached { [weak self] in
             do { for try await line in err.fileHandleForReading.bytes.lines { self?.noteStderr(line) } } catch {}
         }
         let isReady = lock.withLock { self.isReady }
@@ -227,14 +235,9 @@ public final class HarnessWebServer: @unchecked Sendable {
             break
         }
         proc.waitUntilExit()
-        // The exit can be observed before the last stderr lines are read. MCP servers spawned by
-        // dsh may keep the pipe open, so the wait is bounded.
-        _ = await Task { await withTaskGroup(of: Void.self) { group in
-            group.addTask { await stderrDrained.value }
-            group.addTask { try? await Task.sleep(for: .seconds(1)) }
-            await group.next()
-            group.cancelAll()
-        } }.value
+        // Give the stderr reader a moment to capture final diagnostics. A DSH plugin may retain
+        // the pipe after its parent exits, so awaiting that reader would hang this boot forever.
+        try? await Task.sleep(for: .milliseconds(100))
         let tail = lock.withLock { stderrTail.suffix(8).joined(separator: "\n") }
         throw HarnessError.processExited(status: proc.terminationStatus, stderrTail: tail)
     }

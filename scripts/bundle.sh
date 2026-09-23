@@ -16,6 +16,8 @@ rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 touch "$OUT/.metadata_never_index"   # keep build copies out of Spotlight/Launchpad
 cp "$BIN" "$APP/Contents/MacOS/DSH"
+mkdir -p "$APP/Contents/Resources/Integrations/Jev"
+cp Integrations/Jev/router.mjs "$APP/Contents/Resources/Integrations/Jev/router.mjs"
 
 # Icon: the harness's own logo, read from the local dsh install at build time (never committed);
 # without dsh installed, the neutral icon in Resources/ is used.

@@ -113,6 +113,26 @@ private func json(_ s: String) throws -> JSONValue {
         #expect(env["PATH"]!.hasPrefix("/usr/bin:"))
         #expect(env["PATH"]!.contains("/opt/homebrew/bin"))
     }
+
+    @Test func optionalIntegrationKeysAreNeverInheritedFromLoginShell() {
+        let inherited = ["PATH": "/usr/bin", "TYPESAFE_API_KEY": "owner-jev",
+                         "JEV_API_KEY": "old-jev", "OMNI_ROUTER_API_KEY": "owner-omni",
+                         "OMNIROUTER_API_KEY": "old-omni", "OTHER_PROVIDER_KEY": "separate"]
+        let disabled = IntegrationEnvironment.forWebServer(inherited)
+        #expect(disabled["TYPESAFE_API_KEY"] == nil)
+        #expect(disabled["JEV_API_KEY"] == nil)
+        #expect(disabled["OMNI_ROUTER_API_KEY"] == nil)
+        #expect(disabled["OMNIROUTER_API_KEY"] == nil)
+        #expect(disabled["PATH"] == "/usr/bin")
+        #expect(disabled["OTHER_PROVIDER_KEY"] == "separate")
+
+        let enabled = IntegrationEnvironment.forWebServer(inherited,
+                                                           jevKey: "user-jev", omniRouteKey: "user-omni")
+        #expect(enabled["TYPESAFE_API_KEY"] == "user-jev")
+        #expect(enabled["OMNI_ROUTER_API_KEY"] == "user-omni")
+        #expect(enabled["JEV_API_KEY"] == nil)
+        #expect(enabled["OMNIROUTER_API_KEY"] == nil)
+    }
 }
 
 @Suite struct TranscriptReducer {
@@ -162,6 +182,25 @@ private func json(_ s: String) throws -> JSONValue {
         let started = try #require(HarnessWebServer.startDate(of: getpid()))
         #expect(started <= Date() && started > Date().addingTimeInterval(-3600))
         #expect(HarnessWebServer.startDate(of: 999_999) == nil)
+    }
+
+    @Test func earlyExitDoesNotWaitForAPluginHoldingStdout() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dsh-early-exit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = dir.appendingPathComponent("fake-dsh")
+        try "#!/bin/sh\n/bin/sleep 6 &\nexit 1\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        let start = Date()
+        do {
+            _ = try await HarnessWebServer().start(executable: script,
+                environment: ["HOME": dir.path, "PATH": "/usr/bin:/bin"],
+                preferredPort: 0, stallTimeout: 2, timeout: 2)
+            Issue.record("an exited server cannot return a login URL")
+        } catch is HarnessError {
+            #expect(Date().timeIntervalSince(start) < 3)
+        }
     }
 }
 @Suite struct WebServerAuthCookie {

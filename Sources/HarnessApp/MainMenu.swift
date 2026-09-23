@@ -9,7 +9,6 @@ enum MainMenu {
 
         bar.addSubmenu(name, [
             item("About \(name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
-            .separator(),
             item("Settings…", #selector(AppDelegate.showSettings(_:)), ","),
             .separator(),
             item("Hide \(name)", #selector(NSApplication.hide(_:)), "h"),
