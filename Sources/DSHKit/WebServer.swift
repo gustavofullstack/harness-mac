@@ -13,7 +13,38 @@ public final class HarnessWebServer: @unchecked Sendable {
     private var timedOut = false
     private var portInUse = false
 
-    public init() {}
+    private let pidFile: URL?
+
+    /// - Parameter pidFile: where the server's pid is recorded, so a server left behind by a crash
+    ///   or force quit is stopped on the next launch. `dsh --profile web` does not exit when its
+    ///   parent dies, and a leftover instance makes the next one boot for minutes.
+    public init(pidFile: URL? = nil) {
+        self.pidFile = pidFile
+    }
+
+    /// Stops a server recorded in `pidFile` by an earlier run, if it is still a dsh web server.
+    private func reapLeftover() {
+        guard let pidFile, let text = try? String(contentsOf: pidFile, encoding: .utf8),
+              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 else { return }
+        try? FileManager.default.removeItem(at: pidFile)
+        guard Self.commandLine(of: pid).contains("--profile web --no-open --host 127.0.0.1") else { return }
+        kill(pid, SIGTERM)
+        let deadline = Date().addingTimeInterval(6)
+        while kill(pid, 0) == 0, Date() < deadline { usleep(50_000) }
+        if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
+    static func commandLine(of pid: pid_t) -> String {
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "command=", "-p", String(pid)]
+        let out = Pipe()
+        ps.standardOutput = out
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return "" }
+        ps.waitUntilExit()
+        return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    }
 
     /// Parses `dsh web: http://127.0.0.1:PORT/?token=…`. Only loopback http URLs are accepted.
     public static func parseURL(line: String) -> URL? {
@@ -26,10 +57,20 @@ public final class HarnessWebServer: @unchecked Sendable {
 
     /// Starts the server and waits for its URL. Tries `preferredPort` first (a stable origin keeps
     /// the web UI's local storage across launches) and falls back to a free port chosen by the OS.
-    /// Boot time grows with the MCP servers configured in the harness; nearly a minute is normal
-    /// with many `npx` servers, so the timeout is generous and the process is never cut short early.
-    public func start(executable: URL, environment: [String: String],
-                      preferredPort: Int = 3179, timeout: TimeInterval = 180) async throws -> URL {
+    /// A boot silent for `stallTimeout` is restarted once; the retry gets the full `timeout`.
+    public func start(executable: URL, environment: [String: String], preferredPort: Int = 3179,
+                      stallTimeout: TimeInterval = 30, timeout: TimeInterval = 180) async throws -> URL {
+        // A healthy boot takes seconds. Now and then a boot stalls before printing its URL and never
+        // recovers, while the next one is quick again, so one stalled attempt is retried once.
+        do {
+            return try await launchOnAnyPort(executable, environment, preferredPort, stallTimeout)
+        } catch HarnessError.processExited where lock.withLock({ timedOut }) {
+            return try await launchOnAnyPort(executable, environment, preferredPort, timeout)
+        }
+    }
+
+    private func launchOnAnyPort(_ executable: URL, _ environment: [String: String],
+                                 _ preferredPort: Int, _ timeout: TimeInterval) async throws -> URL {
         do {
             return try await launch(executable, environment, port: preferredPort, timeout: timeout)
         } catch HarnessError.processExited where preferredPort != 0 && lock.withLock({ portInUse }) {
@@ -40,11 +81,15 @@ public final class HarnessWebServer: @unchecked Sendable {
     private func launch(_ executable: URL, _ environment: [String: String],
                         port: Int, timeout: TimeInterval) async throws -> URL {
         stop()
+        reapLeftover()
         let proc = Process()
         proc.executableURL = executable
         proc.arguments = ["--profile", "web", "--no-open", "--host", "127.0.0.1", "--port", String(port)]
         proc.environment = environment
         proc.currentDirectoryURL = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
+        // Children inherit the parent's QoS; a backgrounded app would otherwise start dsh and its
+        // MCP servers at background priority, and boot takes minutes instead of seconds.
+        proc.qualityOfService = .userInitiated
         let out = Pipe(), err = Pipe()
         proc.standardOutput = out
         proc.standardError = err
@@ -54,6 +99,7 @@ public final class HarnessWebServer: @unchecked Sendable {
         proc.standardInput = stdin
         do { try proc.run() } catch { throw HarnessError.launchFailed(error.localizedDescription) }
         lock.withLock { process = proc; self.stdin = stdin; stderrTail = []; timedOut = false; portInUse = false }
+        if let pidFile { try? String(proc.processIdentifier).write(to: pidFile, atomically: true, encoding: .utf8) }
 
         // Both pipes are drained for the life of the process, otherwise a full pipe blocks dsh.
         let (urls, found) = AsyncStream<URL?>.makeStream()
@@ -108,8 +154,9 @@ public final class HarnessWebServer: @unchecked Sendable {
     /// SIGTERM, then SIGKILL after `grace` seconds. dsh bounds its own teardown at 5 s and uses it to
     /// stop its MCP servers; killing it earlier would orphan them. Safe from `applicationWillTerminate`.
     public func stop(grace: TimeInterval = 6) {
-        guard let proc = lock.withLock({ () -> Process? in defer { process = nil }; return process }),
-              proc.isRunning else { return }
+        guard let proc = lock.withLock({ () -> Process? in defer { process = nil }; return process }) else { return }
+        if let pidFile { try? FileManager.default.removeItem(at: pidFile) }
+        guard proc.isRunning else { return }
         proc.terminate()
         let deadline = Date().addingTimeInterval(grace)
         while proc.isRunning, Date() < deadline { usleep(20_000) }

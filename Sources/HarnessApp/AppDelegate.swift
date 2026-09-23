@@ -16,10 +16,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.run()
     }
 
-    private let server = HarnessWebServer()
+    private let server = HarnessWebServer(pidFile: {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Harness", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("dsh-web.pid")
+    }())
     private let automation = Automation.fromEnvironment()
     private var window: NSWindow!
     private var web: WebController!
+    /// dsh runs agents that keep working while the window is hidden; App Nap would throttle them.
+    private let noNap = ProcessInfo.processInfo.beginActivity(
+        options: .userInitiatedAllowingIdleSystemSleep, reason: "DeepSeek Harness server is running")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MainMenu.build()

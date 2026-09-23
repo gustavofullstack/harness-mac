@@ -15,6 +15,7 @@ let package = Package(
         .target(name: "DSHKit", dependencies: ["Yams"]),
         .executableTarget(name: "HarnessApp", dependencies: ["DSHKit"]),
         .executableTarget(name: "harness-smoke", dependencies: ["DSHKit"]),
+        .executableTarget(name: "webserver-smoke", dependencies: ["DSHKit"]),
         .testTarget(name: "DSHKitTests", dependencies: ["DSHKit"]),
     ]
 )
