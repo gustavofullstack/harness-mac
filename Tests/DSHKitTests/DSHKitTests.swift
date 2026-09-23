@@ -164,3 +164,16 @@ private func json(_ s: String) throws -> JSONValue {
         #expect(HarnessWebServer.startDate(of: 999_999) == nil)
     }
 }
+@Suite struct WebServerAuthCookie {
+    @Test func matchesDshsCookieName() {
+        // Set-Cookie of a real `dsh --profile web --port 3198`.
+        #expect(HarnessWebServer.authCookieName(port: 3198) == "dsh-auth-RzlCo9Rz1yz29BFrRc8m_0rXfRC1EWk-c9YQI4BxrWM")
+    }
+}
+
+@Suite struct WebServerURLLine {
+    @Test func ignoresTheLANSuffix() {
+        let url = HarnessWebServer.parseURL(line: "dsh web: http://127.0.0.1:3179/?token=abc (LAN: http://192.168.0.2:3179/?token=abc)")
+        #expect(url?.absoluteString == "http://127.0.0.1:3179/?token=abc")
+    }
+}

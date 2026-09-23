@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Runs `dsh --profile web` as a child process bound to loopback and reports the URL it prints.
@@ -16,6 +17,7 @@ public final class HarnessWebServer: @unchecked Sendable {
     private var portInUse = false
 
     private let pidFile: URL?
+    private var isReady: (@Sendable (Int) async -> Bool)?
 
     /// Called on the main queue when the server exits without ``stop()``.
     public var onUnexpectedExit: (@Sendable () -> Void)?
@@ -115,11 +117,27 @@ public final class HarnessWebServer: @unchecked Sendable {
         return url
     }
 
+    /// Name of dsh's session cookie for a server on `port`: `dsh-auth-` + base64url(SHA-256("127.0.0.1:PORT")).
+    /// Cookies ignore ports, so every port dsh ever ran on leaves one more on 127.0.0.1; past ~60 the
+    /// Cookie header exceeds Node's 16 KB limit and every request, the page included, gets HTTP 431.
+    public static func authCookieName(port: Int) -> String {
+        let digest = Data(SHA256.hash(data: Data("127.0.0.1:\(port)".utf8))).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "dsh-auth-" + digest
+    }
+
     /// Starts a fresh server and returns its authenticated URL. Tries `preferredPort` first (a
     /// stable origin keeps local storage across launches) and falls back to a free port. A boot
     /// silent for `stallTimeout` is restarted once; the retry gets the full `timeout`.
+    /// - Parameter isReady: asks a server on a known port whether it finished loading, with the
+    ///   client's own session (dsh's 30-day cookie, which outlives the process). dsh sometimes never
+    ///   prints its URL although it serves normally; a client that is already signed in then loads
+    ///   the root URL as soon as this is true instead of waiting for the stall retry.
     public func start(executable: URL, environment: [String: String], preferredPort: Int = 3179,
-                      stallTimeout: TimeInterval = 15, timeout: TimeInterval = 180) async throws -> URL {
+                      stallTimeout: TimeInterval = 15, timeout: TimeInterval = 180,
+                      isReady: (@Sendable (Int) async -> Bool)? = nil) async throws -> URL {
+        lock.withLock { self.isReady = isReady }
         // A healthy boot takes seconds. Now and then a boot stalls before printing its URL and never
         // recovers, while the next one is quick again, so one stalled attempt is retried once.
         do {
@@ -172,6 +190,19 @@ public final class HarnessWebServer: @unchecked Sendable {
         let stderrDrained = Task.detached { [weak self] in
             do { for try await line in err.fileHandleForReading.bytes.lines { self?.noteStderr(line) } } catch {}
         }
+        let isReady = lock.withLock { self.isReady }
+        let probe = Task.detached {
+            guard let isReady, port != 0 else { return }
+            while proc.isRunning {
+                try await Task.sleep(for: .milliseconds(500))
+                // The port must be served by this process, not by another server left on it.
+                if await isReady(port), Self.listener(on: port) == proc.processIdentifier {
+                    found.yield(URL(string: "http://127.0.0.1:\(port)/"))
+                    return
+                }
+            }
+        }
+        defer { probe.cancel() }
         let watchdog = Task.detached { [weak self] in
             try await Task.sleep(for: .seconds(timeout))
             if proc.isRunning {
@@ -206,6 +237,20 @@ public final class HarnessWebServer: @unchecked Sendable {
         } }.value
         let tail = lock.withLock { stderrTail.suffix(8).joined(separator: "\n") }
         throw HarnessError.processExited(status: proc.terminationStatus, stderrTail: tail)
+    }
+
+    /// The pid listening on a loopback TCP port, if any.
+    static func listener(on port: Int) -> pid_t? {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-nP", "-iTCP@127.0.0.1:\(port)", "-sTCP:LISTEN", "-t"]
+        let out = Pipe()
+        lsof.standardOutput = out
+        lsof.standardError = FileHandle.nullDevice
+        guard (try? lsof.run()) != nil else { return nil }
+        lsof.waitUntilExit()
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return text.split(separator: "\n").first.flatMap { pid_t($0) }
     }
 
     private func noteStderr(_ line: String) {

@@ -1,5 +1,6 @@
 import AppKit
 import DSHKit
+import SwiftUI
 import WebKit
 
 /// Native shell around the official DeepSeek Harness web UI.
@@ -41,7 +42,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
         NSApp.mainMenu = MainMenu.build()
-        setKeepAwake(UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true)
+        setKeepAwake(Preferences.keepAwake)
+        // The Settings window and the View menu both write this default.
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, (self.wakeActivity != nil) != Preferences.keepAwake else { return }
+                self.setKeepAwake(Preferences.keepAwake)
+            }
+        }
         server.onUnexpectedExit = { [weak self] in Task { @MainActor in self?.serverExited() } }
         web = WebController(automation: automation)
         window = makeWindow()
@@ -53,31 +61,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Background mode: no Dock icon, never activated, window kept off every screen.
             NSApp.setActivationPolicy(.accessory)
             window.orderBack(nil)
+            window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
         }
         Task { await boot() }
     }
 
     private func makeWindow() -> NSWindow {
         let frame = NSRect(x: 0, y: 0, width: 1280, height: 820)
-        let style: NSWindow.StyleMask = automation == nil
-            ? [.titled, .closable, .miniaturizable, .resizable]
-            : [.borderless]
-        let w = NSWindow(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
+        // The page runs under a transparent title bar, like Safari or Codex: no strip, no border;
+        // the traffic lights sit over the sidebar's empty top padding (see WebController).
+        let w = AppWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                          backing: .buffered, defer: false)
         w.title = "DSH"
+        w.titleVisibility = .hidden
+        w.titlebarAppearsTransparent = true
+        w.titlebarSeparatorStyle = .none
+        w.backgroundColor = WebController.pageBackground
+        w.appearance = NSAppearance(named: .darkAqua)
         w.minSize = NSSize(width: 720, height: 480)
         w.contentViewController = web
         w.isReleasedWhenClosed = false
         if automation == nil {
-            // Blend the native titlebar into the DSH canvas while preserving familiar macOS
-            // window controls. The web view remains the unmodified upstream interface.
-            w.titleVisibility = .hidden
-            w.titlebarAppearsTransparent = true
-            w.titlebarSeparatorStyle = .none
-            w.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 1)
             w.center()
             w.setFrameAutosaveName("HarnessMainWindow")
             w.tabbingMode = .disallowed
         } else {
+            // Headless: same chrome as the real window, kept off every screen and invisible.
+            w.offscreen = true
+            w.ignoresMouseEvents = true
+            w.alphaValue = 0
             w.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
         }
         return w
@@ -111,7 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            let url = try await server.start(executable: dsh, environment: env, preferredPort: port)
+            let url = try await server.start(executable: dsh, environment: env, preferredPort: port,
+                                             isReady: web.readinessProbe())
             loading.cancel()
             await web.load(url)
         } catch {
@@ -192,8 +205,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func zoomOut(_ sender: Any?) { web.webView.pageZoom = max(web.webView.pageZoom - 0.1, 0.5) }
     @objc func actualSize(_ sender: Any?) { web.webView.pageZoom = 1 }
 
+    private var settingsWindow: NSWindow?
+
+    @objc func showSettings(_ sender: Any?) {
+        if settingsWindow == nil {
+            let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
+            w.title = "Settings"
+            w.styleMask = [.titled, .closable]
+            w.isReleasedWhenClosed = false
+            w.center()
+            settingsWindow = w
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
     @objc func openDocs(_ sender: Any?) {
         NSWorkspace.shared.open(URL(string: "https://deepseek-harness.github.io/deepseek-harness/en/guide/quickstart")!)
+    }
+}
+
+/// A titled window is normally pulled back onto a screen when ordered in; the headless one must
+/// stay off every screen.
+final class AppWindow: NSWindow {
+    var offscreen = false
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        offscreen ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
 }
 

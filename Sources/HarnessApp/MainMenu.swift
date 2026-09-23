@@ -10,6 +10,8 @@ enum MainMenu {
         bar.addSubmenu(name, [
             item("About \(name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),
+            item("Settings…", #selector(AppDelegate.showSettings(_:)), ","),
+            .separator(),
             item("Hide \(name)", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             item("Show All", #selector(NSApplication.unhideAllApplications(_:))),
@@ -58,7 +60,7 @@ enum MainMenu {
         let item = NSMenuItem(title: "Keep Mac Awake While DSH Runs",
                               action: #selector(AppDelegate.toggleKeepAwake(_:)), keyEquivalent: "")
         item.target = NSApp.delegate
-        item.state = (UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true) ? .on : .off
+        item.state = Preferences.keepAwake ? .on : .off
         return item
     }
 }

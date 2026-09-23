@@ -39,6 +39,17 @@ def wait_child(parent_pid: int, excluding: int | None = None, timeout: float = 1
     raise RuntimeError("app did not start or restart its DSH server")
 
 
+def wait_listening(pid: int, timeout: float = 90) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-t"],
+                                capture_output=True, text=True, check=False)
+        if result.stdout.strip():
+            return
+        time.sleep(0.5)
+    raise RuntimeError("DSH server did not start listening")
+
+
 def still_running(pid: int) -> bool:
     result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="], text=True,
                             capture_output=True, check=False)
@@ -59,11 +70,13 @@ def main() -> None:
             first = wait_child(app.pid)
             owned.append(first)
             # Wait for its authenticated page to load so this exercises reconnection, not startup.
+            # A fresh profile installs its plugins first, which takes far longer than a warm boot.
+            wait_listening(first)
             time.sleep(5)
             os.kill(first, signal.SIGTERM)
-            second = wait_child(app.pid, excluding=first)
+            second = wait_child(app.pid, excluding=first, timeout=30)
             owned.append(second)
-            output, _ = app.communicate(timeout=40)
+            output, _ = app.communicate(timeout=120)
             if app.returncode != 0 or not snapshot.is_file() or snapshot.stat().st_size < 1000:
                 raise RuntimeError("app did not complete an off-screen snapshot after reconnect")
             page = output.decode("utf-8", "replace")
