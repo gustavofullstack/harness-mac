@@ -26,8 +26,13 @@ server whose whole lifecycle is owned by the app.
 - Native menus: ⌘R reload, ⇧⌘R restart the harness, ⇧⌘O open in browser, ⌘0/⌘=/⌘- zoom,
   full screen, standard Edit shortcuts.
 - Blends the native titlebar into the harness canvas while keeping macOS window controls.
-- Nothing leaves your Mac: the app reads no credentials and sends no telemetry. Your harness
-  settings, keys and sessions stay where `dsh` keeps them (`~/.dsh`).
+- **Settings…** (⌘,) keeps optional Jev and OmniRoute keys in this Mac's Keychain. Both are
+  off by default, and credentials exported by the login shell are not inherited for these
+  integrations. Enabling a switch only forwards that user's saved key to `dsh`; an actual
+  DSH provider, plugin, or gateway must be configured separately and verified with a request.
+- The Swift host sends no telemetry. The installed `dsh`, model providers, plugins, and
+  user-configured gateways may use the network according to their own settings. Harness
+  settings and sessions remain under `$DSH_HOME` (normally `~/.dsh`).
 
 ## Requirements
 

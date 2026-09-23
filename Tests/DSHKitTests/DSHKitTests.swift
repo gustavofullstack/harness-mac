@@ -113,6 +113,26 @@ private func json(_ s: String) throws -> JSONValue {
         #expect(env["PATH"]!.hasPrefix("/usr/bin:"))
         #expect(env["PATH"]!.contains("/opt/homebrew/bin"))
     }
+
+    @Test func optionalIntegrationKeysAreNeverInheritedFromLoginShell() {
+        let inherited = ["PATH": "/usr/bin", "TYPESAFE_API_KEY": "owner-jev",
+                         "JEV_API_KEY": "old-jev", "OMNI_ROUTER_API_KEY": "owner-omni",
+                         "OMNIROUTER_API_KEY": "old-omni", "OTHER_PROVIDER_KEY": "separate"]
+        let disabled = IntegrationEnvironment.forWebServer(inherited)
+        #expect(disabled["TYPESAFE_API_KEY"] == nil)
+        #expect(disabled["JEV_API_KEY"] == nil)
+        #expect(disabled["OMNI_ROUTER_API_KEY"] == nil)
+        #expect(disabled["OMNIROUTER_API_KEY"] == nil)
+        #expect(disabled["PATH"] == "/usr/bin")
+        #expect(disabled["OTHER_PROVIDER_KEY"] == "separate")
+
+        let enabled = IntegrationEnvironment.forWebServer(inherited,
+                                                           jevKey: "user-jev", omniRouteKey: "user-omni")
+        #expect(enabled["TYPESAFE_API_KEY"] == "user-jev")
+        #expect(enabled["OMNI_ROUTER_API_KEY"] == "user-omni")
+        #expect(enabled["JEV_API_KEY"] == nil)
+        #expect(enabled["OMNIROUTER_API_KEY"] == nil)
+    }
 }
 
 @Suite struct TranscriptReducer {

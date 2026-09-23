@@ -6,8 +6,10 @@ struct SettingsView: View {
         TabView {
             GeneralSettings()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            IntegrationSettingsView()
+                .tabItem { Label("Integrations", systemImage: "link") }
         }
-        .frame(width: 560)
+        .frame(width: 660, height: 620)
         .preferredColorScheme(.dark)
     }
 }

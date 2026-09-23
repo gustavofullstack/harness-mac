@@ -112,10 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             web?.showLoading("Starting DeepSeek Harness…")
         }
         defer { loading.cancel() }
-        let env = await Task.detached { HarnessEnvironment.loginShell() }.value
+        let loginEnv = await Task.detached { HarnessEnvironment.loginShell() }.value
         let override = UserDefaults.standard.string(forKey: "dshPath") ?? ""
         let dsh = FileManager.default.isExecutableFile(atPath: override)
-            ? URL(fileURLWithPath: override) : HarnessEnvironment.locateDSH(in: env)
+            ? URL(fileURLWithPath: override) : HarnessEnvironment.locateDSH(in: loginEnv)
         guard let dsh else {
             web.showError("`dsh` was not found on your PATH.\n\nInstall DeepSeek Harness with the official quickstart, or point the app at it:\ndefaults write io.github.harness-mac dshPath /path/to/dsh",
                           retry: { [weak self] in Task { await self?.boot() } })
@@ -123,6 +123,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
+            // The login shell can contain the owner's private credentials. Optional public
+            // integrations use only the keys this user explicitly saved and enabled in Keychain.
+            let env = IntegrationEnvironment.forWebServer(
+                loginEnv,
+                jevKey: OptionalIntegration.jev.isEnabled ? OptionalIntegration.jev.storedKey() : nil,
+                omniRouteKey: OptionalIntegration.omniRoute.isEnabled ? OptionalIntegration.omniRoute.storedKey() : nil)
             let url = try await server.start(executable: dsh, environment: env, preferredPort: port,
                                              isReady: web.readinessProbe())
             loading.cancel()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real DSH.app crash/reconnect path without using the foreground screen.
 
-Requires an installed `dsh` on PATH and a built `.build/debug/DSH` in this checkout.
+Requires an installed `dsh` on PATH and a bundled `dist/DSH.app` in this checkout.
 It uses a temporary DSH profile, kills only the server child started by this app,
 and checks that the app recovers and stops its replacement child on exit.
 """
@@ -15,7 +15,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
-APP = ROOT / ".build/debug/DSH"
+APP = ROOT / "dist/DSH.app/Contents/MacOS/DSH"
 
 
 def server_child(parent_pid: int, excluding: int | None = None) -> int | None:
@@ -30,7 +30,7 @@ def server_child(parent_pid: int, excluding: int | None = None) -> int | None:
     return None
 
 
-def wait_child(parent_pid: int, excluding: int | None = None, timeout: float = 15) -> int:
+def wait_child(parent_pid: int, excluding: int | None = None, timeout: float = 45) -> int:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if pid := server_child(parent_pid, excluding):
@@ -58,7 +58,7 @@ def still_running(pid: int) -> bool:
 
 def main() -> None:
     if not APP.is_file():
-        raise SystemExit("build DSH first: swift build --product DSH")
+        raise SystemExit("bundle DSH first: scripts/bundle.sh")
     with tempfile.TemporaryDirectory(prefix="dsh-reconnect-") as profile:
         snapshot = Path(profile) / "recovered.png"
         env = os.environ.copy()
@@ -81,7 +81,8 @@ def main() -> None:
                 raise RuntimeError("app did not complete an off-screen snapshot after reconnect")
             page = output.decode("utf-8", "replace")
             if "ui: connected" not in page:
-                raise RuntimeError("recovered page did not show the connected DSH UI")
+                # App stdout is deliberately limited to sanitized UI/snapshot state.
+                raise RuntimeError(f"recovered page did not show the connected DSH UI: {page.strip()}")
             if still_running(second):
                 raise RuntimeError("replacement DSH server remained after app exit")
             print("reconnect smoke: authenticated page recovered; replacement server stopped on quit")

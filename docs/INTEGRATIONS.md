@@ -18,6 +18,28 @@ to one coding app does not imply API access to its model. Configure each transpo
 provider's supported client or the installed DSH settings; test a real request before calling
 the route connected.
 
+## Optional public integrations
+
+**Settings…** (⌘,) starts Jev and OmniRoute disabled. A user can save their own API keys
+in macOS Keychain and then enable each integration. The app filters `TYPESAFE_API_KEY`,
+`JEV_API_KEY`, `OMNI_ROUTER_API_KEY`, and `OMNIROUTER_API_KEY` from the login shell's
+environment before starting `dsh`. It only supplies `TYPESAFE_API_KEY` or
+`OMNI_ROUTER_API_KEY` from the enabled Keychain entry. The public bundle contains no owner
+credential, profile, endpoint, or default key. Removing a key turns its switch off.
+
+The switches authorize key forwarding; they do not install a Jev adapter or OmniRoute
+model provider. A Jev adapter must actually call TypeSafe and apply a typed decision at
+the correct gate. An OmniRoute route needs a DSH provider configuration that uses
+`apiKeyEnv: OMNI_ROUTER_API_KEY`. A saved key is not proof of a successful request.
+Restart Harness after changing either switch. Existing user-owned `$DSH_HOME` settings
+may still reference local gateways or credentials outside these two settings; the app
+does not silently rewrite those files.
+
+RAG, rerank, brain, memory, summaries, graph, and extension registries remain dependent
+on actual DSH plugins or services. The Settings panel identifies that boundary and the
+installed DSH Web settings remain available for those adapters. There is no built-in
+first-party runtime implementation of these features in the Swift shell yet.
+
 ## Model and effort selection
 
 DSH stores a provider and model as separate fields. A custom model has no Effort menu until
